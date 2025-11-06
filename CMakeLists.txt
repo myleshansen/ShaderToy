@@ -24,7 +24,7 @@ add_subdirectory(dependencies/glad)				#opengl loader
 # add_subdirectory(thirdparty/stb_image)		#loading immaged
 # add_subdirectory(thirdparty/stb_truetype)		#loading ttf files
 # add_subdirectory(thirdparty/glm)				#math
-# add_subdirectory(thirdparty/imgui-docking)	#ui
+add_subdirectory(dependencies/imgui)	#ui
 
 file(GLOB_RECURSE MY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
@@ -53,6 +53,6 @@ endif()
 target_include_directories("${CMAKE_PROJECT_NAME}" PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 
 
-target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glfw glad)
+target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glfw glad imgui)
 #target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glm glfw 
 #	glad stb_image stb_truetype imgui)
