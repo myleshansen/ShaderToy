@@ -303,3 +303,9 @@ GLint getUniform(GLuint shaderId, const char* name)
 	}
 	return uniform;
 }
+
+GLuint getProgramID() {
+	// return this->programID;
+	GLuint ttest = 0;
+	return ttest;
+}

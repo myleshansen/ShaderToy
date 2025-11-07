@@ -1,14 +1,22 @@
 #version 460 core
 
-layout(location = 0) out vec4 out_color;
+layout(location = 0) out vec4 fragColor;
 
-in vec3 v_color;
-in vec3 v_position;
+in vec2 fragCoord;
 
-uniform float u_time;
+uniform float iTime;
 uniform vec3 u_color;
+uniform vec2 iResolution;
 
 void main()
 {
-    out_color = vec4(v_color, 1.0);
+    vec2 fragCoord = gl_FragCoord.xy;
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy;
+
+    // Time varying pixel color
+    vec3 col = 0.5 + 0.5*cos(iTime+uv.xyx+vec3(0,2,4));
+
+    // Output to screen
+    fragColor = vec4(col,1.0);
 }

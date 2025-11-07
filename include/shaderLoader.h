@@ -18,6 +18,7 @@ struct Shader
 	void clear();
 
 	GLint getUniform(const char* name);
+	GLuint Shader::getProgramID();
 };
 
 GLint getUniform(GLuint shaderId, const char* name);
