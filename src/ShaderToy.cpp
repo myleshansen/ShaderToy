@@ -22,22 +22,44 @@ float triangleVertices[] = {
 		1.0, -1.0, 0,	0, 0, 1		// Vertex 4
 };
 
-//float triangleVertices[] = {
-//		0.5, 0.5, 0,	1, 0, 0,	// Vertex 1
-//	   -0.5, 0.5, 0,	0, 1, 0,	// Vertex 2
-//	   -0.5, -0.5, 0,	0, 0, 1,	// Vertex 3
-//		0.5, -0.5, 0,	0, 0, 1		// Vertex 4
-//};
-
 unsigned short indices[] = {
 	0, 1, 2,
 	0, 2, 3
 };
 
+double lastMouseX = 0.0;
+double lastMouseY = 0.0;
+bool firstMouse = true;
+
 static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
 	if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
 		glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+{
+	if (firstMouse)
+	{
+		lastMouseX = xpos;
+		lastMouseY = ypos;
+		firstMouse = false;
+	}
+
+	double xoffset = xpos - lastMouseX;
+	double yoffset = lastMouseY - ypos; // Reversed since y-coordinates go from bottom to top
+
+	lastMouseX = xpos;
+	lastMouseY = ypos;
+}
+
+static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+	{
+		// Handle left mouse button press
+		// cout << "Left mouse button pressed at (" << lastMouseX << ", " << lastMouseY << ")\n";
+	}
 }
 
 int main()
@@ -48,10 +70,8 @@ int main()
 		return -1;
 	}
 
-#pragma region report opengl errors to std
 	// Enable opengl debugging output.
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, true);
-#pragma endregion
 
 	GLFWwindow* window = glfwCreateWindow(640, 480, "ShaderToy", NULL, NULL);
 	if (!window)
@@ -70,12 +90,13 @@ int main()
 	}
 	glfwSwapInterval(1);
 
-#pragma region report opengl errors to std
+	glfwSetCursorPosCallback(window, mouse_callback);
+	glfwSetMouseButtonCallback(window, mouse_button_callback);
+
 	glEnable(GL_DEBUG_OUTPUT);
 	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 	glDebugMessageCallback(glDebugOutput, 0);
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
-#pragma endregion
 
 	ImGui::CreateContext();
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -114,24 +135,36 @@ int main()
 	s.loadShaderProgramFromFile(RESOURCES_PATH "vertex.vert", RESOURCES_PATH "fragment.frag");
 	s.bind();
 
-	GLint u_time = s.getUniform("iTime");
-	GLint u_color = s.getUniform("u_color");
 	GLint u_resolution = s.getUniform("iResolution");
-	GLint iTimeDelta = s.getUniform("iTimeDelta");
+	GLint u_time = s.getUniform("iTime");
+	GLint u_time_delta = s.getUniform("iTimeDelta");
+	GLint u_frame_rate = s.getUniform("iFrameRate");
+	GLint u_frame = s.getUniform("iFrame");
+	GLint u_mouse = s.getUniform("iMouse");
+	GLint u_date = s.getUniform("iDate");
 
-	float startTime = (float)clock() / 750.f;
+
+	static int frameCount = 0;
+
 	float timer = 0.0f;
-	bool timerActive = true;
+	bool timerActive = false;  // Start paused
+	float lastFrameTime = (float)glfwGetTime();
 
 	while (!glfwWindowShouldClose(window))
 	{
-		timer += timerActive ? 0.016f : 0.0f;
-		// cout << "Time: " << timer << "\n";
+		frameCount++;
+		float currentFrameTime = (float)glfwGetTime();
+		float deltaTime = currentFrameTime - lastFrameTime;
+		lastFrameTime = currentFrameTime;
+
+		if (timerActive) {
+			timer += deltaTime;  // Accumulate real time only when playing
+		}
 
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(window, &width, &height);
-		glViewport(0, 0, width, height); // Set the viewport to the window dimensions
-		glClear(GL_COLOR_BUFFER_BIT); // Clear the screen
+		glViewport(0, 0, width, height);
+		glClear(GL_COLOR_BUFFER_BIT);
 
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -173,74 +206,8 @@ int main()
 
 		if (ImGui::Button("Restart"))
 		{
-			// reset host-side state
 			timer = 0.0f;
-			timerActive = true;
-			startTime = (float)clock() / 750.f;
-
-			// --- Delete previous GL objects ---
-			// Unbind before deleting
-			glBindVertexArray(0);
-			if (ibo) { glDeleteBuffers(1, &ibo); ibo = 0; }
-			if (vbo) { glDeleteBuffers(1, &vbo); vbo = 0; }
-			if (vao) { glDeleteVertexArrays(1, &vao); vao = 0; }
-
-			// If your Shader class exposes the program ID, delete it.
-			// Add a getProgramID() method to Shader if you don't have one.
-			#if 1
-			// If Shader::getProgramID() exists:
-						GLuint prog = 0;
-						// try-catch like access; if your Shader doesn't have this, remove these two lines
-						// prog = s.getProgramID();
-						// if (prog) { glDeleteProgram(prog); }
-			#endif
-
-			// --- Recreate VAO/VBO/IBO exactly like initialization ---
-			glGenVertexArrays(1, &vao);
-			glBindVertexArray(vao);
-
-			glGenBuffers(1, &vbo);
-			glBindBuffer(GL_ARRAY_BUFFER, vbo);
-			glBufferData(GL_ARRAY_BUFFER, sizeof(triangleVertices), triangleVertices, GL_STATIC_DRAW);
-
-			// position attribute
-			glEnableVertexAttribArray(0);
-			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-
-			// color attribute (re-upload ensures initial vertex colors are present)
-			glEnableVertexAttribArray(1);
-			glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-
-			glGenBuffers(1, &ibo);
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-			glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-			// --- Reload shader from file and bind ---
-			s.loadShaderProgramFromFile(RESOURCES_PATH "vertex.vert", RESOURCES_PATH "fragment.frag");
-			s.bind();
-
-			// --- Refresh uniform locations (program changed) ---
-			u_time = s.getUniform("iTime");
-			u_color = s.getUniform("u_color");
-			u_resolution = s.getUniform("iResolution");
-			iTimeDelta = s.getUniform("iTimeDelta");
-
-			// --- Set initial uniform values to match first-run ---
-			if (u_color != -1) {
-				// If your shader has u_color and you want it at some default:
-				glUniform3f(u_color, 0.0f, 0.0f, 0.0f); // adjust default as needed
-			}
-			if (u_time != -1) {
-				glUniform1f(u_time, 0.0f);
-			}
-			// update resolution
-			int w, h; glfwGetFramebufferSize(window, &w, &h);
-			if (u_resolution != -1) glUniform2f(u_resolution, (float)w, (float)h);
-
-			// --- Clear framebuffer so there's no leftover accumulated image ---
-			glBindFramebuffer(GL_FRAMEBUFFER, 0);
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-			glFinish();
+			timerActive = false; // restart paused
 		}
 
 		ImGui::SameLine();
@@ -252,22 +219,45 @@ int main()
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar();
 
+		// Shader updates
 		s.bind();
 
-		float currentTime = (float)clock() / 750.f;
-		if (u_time != -1) glUniform1f(u_time, currentTime - startTime);
 		if (u_resolution != -1) glUniform2f(u_resolution, (float)width, (float)height);
+		if (u_time != -1) glUniform1f(u_time, timer);
+		if (u_time_delta != -1) glUniform1f(u_time_delta, deltaTime);
+		if (u_frame_rate != -1) glUniform1f(u_frame_rate, 1.0f / deltaTime);
+		if (u_frame != -1) glUniform1i(u_frame, frameCount);
+		if (u_mouse != -1)
+		{
+			float mouseX = (float)lastMouseX;
+			float mouseY = (float)(height - lastMouseY); // Invert Y for shader coordinates
+			glUniform4f(u_mouse, mouseX, mouseY,
+				glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS ? mouseX : 0.0f,
+				glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS ? mouseY : 0.0f);
+		}
+		if (u_date != -1)
+		{
+			time_t now = time(0);
+			tm* ltm = localtime(&now);
+			glUniform4f(u_date,
+				(float)(ltm->tm_year + 1900),
+				(float)(ltm->tm_mon + 1),
+				(float)ltm->tm_mday,
+				(float)(ltm->tm_hour * 3600 + ltm->tm_min * 60 + ltm->tm_sec));
+		}
+		
 
 		glBindVertexArray(vao);
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
 
+		// ImGui render
 		ImGui::Render();
 		int display_w, display_h = 0;
 		glfwGetFramebufferSize(window, &display_w, &display_h);
 		glViewport(0, 0, display_w, display_h);
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-		
-		glfwSwapBuffers(window); // Swap front and back buffers
+
+		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
 
@@ -275,9 +265,9 @@ int main()
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 
-	glfwDestroyWindow(window); // Clean up and exit
+	glfwDestroyWindow(window);
 
-	glfwTerminate(); // Terminate GLFW
+	glfwTerminate();
 
 	return 0;
 }

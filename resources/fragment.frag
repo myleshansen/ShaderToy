@@ -5,6 +5,7 @@ layout(location = 0) out vec4 fragColor;
 in vec2 fragCoord;
 
 uniform float iTime;
+uniform vec4 iDate;
 uniform vec3 u_color;
 uniform vec2 iResolution;
 
