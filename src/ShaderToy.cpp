@@ -3,6 +3,8 @@
 
 #include "ShaderToy.h"
 
+#include "TextEditor.h"
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -30,6 +32,10 @@ unsigned short indices[] = {
 double lastMouseX = 0.0;
 double lastMouseY = 0.0;
 bool firstMouse = true;
+
+static TextEditor editor;
+static bool shaderDirty = false;
+static std::string userShaderCode;
 
 static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -60,6 +66,196 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
 		// Handle left mouse button press
 		// cout << "Left mouse button pressed at (" << lastMouseX << ", " << lastMouseY << ")\n";
 	}
+}
+
+
+std::filesystem::file_time_type getFileLastWriteTime(const std::string& filePath)
+{
+	try
+	{
+		return std::filesystem::last_write_time(filePath);
+	}
+	catch (const std::filesystem::filesystem_error& e)
+	{
+		std::cerr << "Error getting last write time for file " << filePath << ": " << e.what() << std::endl;
+		return std::filesystem::file_time_type::min();
+	}
+}
+
+std::string loadUserShaderSection(const std::string& path) {
+	std::ifstream file(path);
+	std::string line;
+	std::string content;
+
+	bool inside = false;
+
+	while (std::getline(file, line)) {
+		if (line.find("// BEGIN_USER_CODE") != std::string::npos) {
+			inside = true;
+			continue;
+		}
+		if (line.find("// END_USER_CODE") != std::string::npos) {
+			inside = false;
+			continue;
+		}
+		if (inside)
+			content += line + "\n";
+	}
+
+	return content;
+}
+
+std::string buildFullFragmentShader(const std::string& userCode) {
+	return
+		R"(#version 460 core
+
+layout(location = 0) out vec4 fragColor;
+in vec2 fragCoord;
+
+uniform float iTime;
+uniform vec4 iDate;
+uniform vec3 u_color;
+uniform vec2 iResolution;
+
+// BEGIN_USER_CODE
+)" + userCode +
+R"(// END_USER_CODE
+
+void main()
+{
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    vec3 col = userColor(uv);
+    fragColor = vec4(col, 1.0);
+}
+)";
+}
+
+GLuint loadShaderFromString(GLenum type, const std::string& source)
+{
+	GLuint shader = glCreateShader(type);
+	const char* src = source.c_str();
+	glShaderSource(shader, 1, &src, nullptr);
+	glCompileShader(shader);
+
+	// Check compiler errors
+	GLint success;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+
+	if (!success) {
+		GLint logLength;
+		glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+
+		std::string log(logLength, ' ');
+		glGetShaderInfoLog(shader, logLength, nullptr, &log[0]);
+
+		std::cerr << "[Shader Error] Compile failed:\n" << log << std::endl;
+
+		glDeleteShader(shader);
+		return 0;
+	}
+
+	return shader;
+}
+
+GLuint linkProgram(GLuint vertexShader, GLuint fragmentShader)
+{
+	GLuint program = glCreateProgram();
+	if (!program) {
+		std::cerr << "Error: Failed to create GL program\n";
+		return 0;
+	}
+
+	glAttachShader(program, vertexShader);
+	glAttachShader(program, fragmentShader);
+
+	glLinkProgram(program);
+
+	// Check linking errors
+	GLint success;
+	glGetProgramiv(program, GL_LINK_STATUS, &success);
+
+	if (!success) {
+		GLint logLength = 0;
+		glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
+
+		std::string log(logLength, ' ');
+		glGetProgramInfoLog(program, logLength, nullptr, log.data());
+
+		std::cerr << "[Program Link Error]\n" << log << std::endl;
+
+		glDeleteProgram(program);
+		return 0;
+	}
+
+	// Optional: detach shaders after linking
+	glDetachShader(program, vertexShader);
+	glDetachShader(program, fragmentShader);
+
+	return program;
+}
+
+bool compileShaderWithErrors(GLenum type, const std::string& src, GLuint& outShader, std::string& outErrors)
+{
+	outErrors.clear();
+	outShader = glCreateShader(type);
+
+	const char* csrc = src.c_str();
+	glShaderSource(outShader, 1, &csrc, nullptr);
+	glCompileShader(outShader);
+
+	GLint success = 0;
+	glGetShaderiv(outShader, GL_COMPILE_STATUS, &success);
+
+	if (!success) {
+		GLint logSize = 0;
+		glGetShaderiv(outShader, GL_INFO_LOG_LENGTH, &logSize);
+		outErrors.resize(logSize);
+		glGetShaderInfoLog(outShader, logSize, nullptr, &outErrors[0]);
+
+		glDeleteShader(outShader);
+		outShader = 0;
+		return false;
+	}
+
+	return true;
+}
+
+TextEditor::ErrorMarkers buildErrorMarkers(const std::string& log)
+{
+	TextEditor::ErrorMarkers markers;
+
+	std::istringstream iss(log);
+	std::string line;
+
+	while (std::getline(iss, line)) {
+		// typical GLSL formats:
+		// 0(17) : error C1008: ...
+		// ERROR: 0:17: 'xxx' : error
+		int lineNum = -1;
+
+		// Pattern 1: 0(17)
+		size_t open = line.find('(');
+		size_t close = line.find(')');
+		if (open != std::string::npos && close != std::string::npos && close > open) {
+			lineNum = std::stoi(line.substr(open + 1, close - open - 1));
+		}
+
+		// Pattern 2: ERROR: 0:17:
+		size_t colon1 = line.find(':');
+		size_t colon2 = line.find(':', colon1 + 1);
+		if (colon1 != std::string::npos && colon2 != std::string::npos) {
+			try {
+				lineNum = std::stoi(line.substr(colon1 + 1, colon2 - colon1 - 1));
+			}
+			catch (...) {}
+		}
+
+		if (lineNum >= 0) {
+			markers[lineNum] = line;
+		}
+	}
+
+	return markers;
 }
 
 int main()
@@ -150,12 +346,49 @@ int main()
 	bool timerActive = false;  // Start paused
 	float lastFrameTime = (float)glfwGetTime();
 
+	std::string fragmentShaderPath = RESOURCES_PATH "fragment.frag";
+	auto lastWriteTime = getFileLastWriteTime(fragmentShaderPath);
+
+	userShaderCode = loadUserShaderSection(fragmentShaderPath);
+
+	if (userShaderCode.empty()) {
+		userShaderCode =
+				R"(vec3 userColor(vec2 uv)
+					{
+						return 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0, 2, 4));
+					}
+				)";
+	}
+
+	editor.SetLanguageDefinition(TextEditor::LanguageDefinition::GLSL());
+	editor.SetText(userShaderCode);
+
+	static bool compileShaderFromEditor = false;
+
 	while (!glfwWindowShouldClose(window))
 	{
 		frameCount++;
 		float currentFrameTime = (float)glfwGetTime();
 		float deltaTime = currentFrameTime - lastFrameTime;
 		lastFrameTime = currentFrameTime;
+
+		auto currentWriteTime = getFileLastWriteTime(fragmentShaderPath);
+
+		if (currentWriteTime != lastWriteTime)
+		{
+			std::cout << "Detected change in fragment shader. Reloading..." << std::endl;
+			if (s.loadShaderProgramFromFile(RESOURCES_PATH "vertex.vert", RESOURCES_PATH "fragment.frag"))
+			{
+				timer = 0.0f;
+				timerActive = false; // restart paused
+				std::cout << "Shader reloaded successfully." << std::endl;
+			}
+			else
+			{
+				std::cout << "Failed to reload shader." << std::endl;
+			}
+			lastWriteTime = currentWriteTime;
+		}
 
 		if (timerActive) {
 			timer += deltaTime;  // Accumulate real time only when playing
@@ -218,6 +451,82 @@ int main()
 		ImGui::End();
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar();
+
+		ImGui::Begin("Fragment Shader Editor");
+
+		ImGui::Text("Editing: %s", fragmentShaderPath.c_str());
+		ImGui::Separator();
+
+		// Calculate size for the editor that leaves some room for buttons
+		ImVec2 avail = ImGui::GetContentRegionAvail();
+
+		// Leave ~2 button rows of height + some padding
+		float buttonRowHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
+		avail.y -= buttonRowHeight;
+		if (avail.y < 100.0f) avail.y = 100.0f; // clamp to something reasonable
+
+		bool ctrl = ImGui::GetIO().KeyCtrl;
+
+		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+			// Ctrl+S -> Save file
+			std::ofstream out(fragmentShaderPath);
+			out << buildFullFragmentShader(editor.GetText());
+			out.close();
+			std::cout << "[Hotkey] Saved shader.\n";
+		}
+
+		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+			// Ctrl+Enter -> Compile shader
+			compileShaderFromEditor = true;
+		}
+
+		// Editor widget
+		editor.Render("ShaderEditor", avail);
+
+		// Track changes
+		if (editor.IsTextChanged()) {
+			shaderDirty = true;
+		}
+
+		// Buttons
+		if (ImGui::Button("Compile Shader") || compileShaderFromEditor)
+		{
+			compileShaderFromEditor = false;
+
+			std::string editedCode = editor.GetText();
+			std::string fullShader = buildFullFragmentShader(editedCode);
+
+			// 1. Write file back to disk
+			std::ofstream out(fragmentShaderPath);
+			out << fullShader;
+			out.close();
+
+			// 2. Compile fragment shader with error capture
+			GLuint newFrag;
+			std::string errors;
+
+			if (!compileShaderWithErrors(GL_FRAGMENT_SHADER, fullShader, newFrag, errors))
+			{
+				std::cout << "[Shader] Compile FAILED:\n" << errors << std::endl;
+
+				// Build ImGui error markers
+				editor.SetErrorMarkers(buildErrorMarkers(errors));
+				continue;
+			}
+
+			// Clear error markers if successful
+			editor.SetErrorMarkers(TextEditor::ErrorMarkers());
+
+			// 3. Link using your Shader class
+			if (s.loadShaderProgramFromFile(RESOURCES_PATH "vertex.vert", fragmentShaderPath.c_str()))
+			{
+				std::cout << "[Shader] Compilation + link successful.\n";
+				s.bind();
+				lastWriteTime = getFileLastWriteTime(fragmentShaderPath);
+			}
+		}
+
+		ImGui::End();
 
 		// Shader updates
 		s.bind();
