@@ -49,11 +49,15 @@ if(MSVC) # If using the VS compiler...
 
 endif()
 
-find_package(X11 REQUIRED)
-
 target_include_directories("${CMAKE_PROJECT_NAME}" PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 
-
-target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glfw glad imgui X11)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glfw glad imgui X11)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glfw glad imgui)
+else()
+    message(FATAL_ERROR "Unsupported OS")
+endif()
 #target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glm glfw
 #	glad stb_image stb_truetype imgui)
